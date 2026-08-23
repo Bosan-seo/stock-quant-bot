@@ -1,0 +1,47 @@
+# Environment variables and secrets (CRITICAL)
+.env
+.env.local
+*.env
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# Logs and databases
+*.log
+bot.log
+
+# Deploy archives & temp files
+*.zip
+stock_bot_deploy.zip
+tests/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

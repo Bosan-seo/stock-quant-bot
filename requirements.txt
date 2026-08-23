@@ -1,0 +1,9 @@
+yfinance>=0.2.36
+pykrx>=1.0.45
+pandas>=2.0.0
+numpy>=1.24.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+python-telegram-bot>=20.0
+fastapi>=0.100.0
+uvicorn>=0.22.0
