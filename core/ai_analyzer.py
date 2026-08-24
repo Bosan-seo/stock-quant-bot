@@ -121,19 +121,35 @@ def _rule_based_quant_diagnosis(data: Dict[str, Any]) -> str:
 
 
 def _is_valid_ai_response(text: str) -> bool:
-    """Validate if AI output meets structural and Korean quality standards."""
-    if not text or len(text.strip()) < 30:
+    """Validate if AI output meets strict structural and Korean quality standards."""
+    if not text or len(text.strip()) < 35:
         return False
     
-    # Must not start with English meta thoughts
-    if text.strip().startswith(("(", "1.", "2.", "Evaluate", "Korean", "Thinking", "Here", "Sure")):
+    clean = text.strip()
+    
+    # 1. Must not contain English meta thoughts or reasoning debris
+    forbidden_meta = [
+        "looking at", "fits", "here is", "sure", "evaluate", "thinking", "i will",
+        "analysis:", "explanation", "rule 1", "output:", "option", "note:"
+    ]
+    if any(m in clean.lower() for m in forbidden_meta):
         return False
 
-    # Must contain bullet points or rating emojis
-    has_bullet = "•" in text or "-" in text
-    has_tag = any(emoji in text for emoji in ["🟢", "🔵", "⚖️", "🟡", "🔴", "매수", "중립", "관망", "축소"])
+    # 2. Check Hangul character ratio (at least 45% Korean characters)
+    hangul_chars = len(re.findall(r"[가-힣]", clean))
+    total_chars = len(clean)
+    if total_chars > 0 and (hangul_chars / total_chars) < 0.40:
+        return False
+
+    # 3. Must contain proper bullet points
+    bullet_count = clean.count("•") + clean.count("- ")
+    if bullet_count < 2:
+        return False
+
+    # 4. Must contain rating emoji tag
+    has_tag = any(emoji in clean for emoji in ["🟢", "🔵", "⚖️", "🟡", "🔴"])
     
-    return has_bullet and has_tag
+    return has_tag
 
 
 def generate_quant_opinion(stock_data: Dict[str, Any]) -> str:
@@ -205,3 +221,103 @@ def generate_quant_opinion(stock_data: Dict[str, Any]) -> str:
 
     # Fallback to high-precision rule-based engine
     return _rule_based_quant_diagnosis(stock_data)
+
+
+def _rule_based_market_diagnosis(market_type: str, indices_data: List[Dict[str, Any]]) -> str:
+    """Fallback rule-based market condition summary."""
+    up_count = sum(1 for idx in indices_data if (idx.get("change") or 0) > 0)
+    down_count = sum(1 for idx in indices_data if (idx.get("change") or 0) < 0)
+    
+    if up_count > down_count:
+        rating = "🟢 **[전반적 강세 / 위험 선호 장세]**"
+        b1 = "주요 시장 지수가 전일 대비 상승세를 보이며 우호적인 투자 심리가 유지되고 있습니다."
+        b2 = "대형 주도주 및 성장 섹터 중심의 견조한 매수세가 시장을 견인 중입니다."
+        b3 = "추세 추종 매매가 유리하며 지수 주요 지지선 유지 여부를 모니터링하세요."
+    elif down_count > up_count:
+        rating = "🟡 **[단기 조정 / 차익 매물 소화]**"
+        b1 = "주요 시장 지수가 하락 압력을 받으며 단기 리스크 관리 국면에 진입했습니다."
+        b2 = "금리 및 거시 변동성에 따른 경계 심리로 차익 실현 매물이 출회 중입니다."
+        b3 = "성급한 추격 매수보다는 하단 지지선 확인 후 분할 매수 접근을 권장합니다."
+    else:
+        rating = "⚖️ **[혼조세 / 종목별 차별화 장세]**"
+        b1 = "시장 지수가 뚜렷한 방향성 없이 팽팽한 수급 공방을 이어가고 있습니다."
+        b2 = "지수보다는 개별 실적 우량주 및 특정 테마 중심으로 순환매가 전개되고 있습니다."
+        b3 = "철저한 밸류에이션 점검과 손절가 설정을 통한 선별적 대응이 필수적입니다."
+
+    market_name = "미국 증시" if market_type.upper() == "US" else "국내 증시"
+    return f"💡 **Gemini AI {market_name} 종합 시황 진단**\n{rating}\n• {b1}\n• {b2}\n• {b3}"
+
+
+def generate_market_opinion(
+    market_type: str,
+    indices_data: List[Dict[str, Any]],
+    news_items: List[Dict[str, str]],
+    macro_context: Optional[Dict[str, Any]] = None
+) -> str:
+    """
+    Generate 3-line comprehensive macro/market condition opinion using Gemini AI.
+    """
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return _rule_based_market_diagnosis(market_type, indices_data)
+
+    market_name = "미국 증시 (Wall Street)" if market_type.upper() == "US" else "국내 증시 (KRX/코스피·코스닥)"
+    
+    # Format indices overview
+    idx_lines = []
+    for idx in indices_data:
+        name = idx.get("name", "")
+        price = idx.get("price")
+        pct = idx.get("change_pct")
+        if price is not None and pct is not None:
+            idx_lines.append(f"{name}: {price:,.2f} ({pct:+.2f}%)")
+    indices_str = " / ".join(idx_lines) if idx_lines else "지수 데이터 수집 중"
+
+    # Format news headlines
+    news_lines = [item.get("title", "") for item in news_items if item.get("title")]
+    news_str = " | ".join(news_lines[:3]) if news_lines else "주요 속보 수집 중"
+
+    prompt = f"""당신은 최고 수준의 글로벌 거시경제 및 주식 시장 전략가(Macro Strategist)입니다.
+아래 시장 데이터와 헤드라인 뉴스를 종합 분석하여 텔레그램 리포트용 '3줄 {market_name} 종합 시황 진단 및 투자 전략'을 한국어로 작성하세요.
+
+[시장 현황]
+• 시장: {market_name}
+• 주요 지수 등락: {indices_str}
+• 실시간 핵심 뉴스: {news_str}
+
+[출력 형식 예시]
+🟢 **[기술주 중심 강세 / 위험 선호 지속]**
+• 나스닥과 S&P500이 빅테크 실적 기대감과 국채금리 안정세 속에 견고한 상승 흐름을 유지했습니다.
+• 전반적인 시장 리스크는 낮으나 단기 급등에 따른 차익 실현 매물 출회 가능성에 유의해야 합니다.
+• 주도 섹터 눌림목 분할 매수 전략이 유효하며 주요 지수 20일선 지지력을 지속 점검하세요.
+
+[작성 규칙]
+1. 첫째 줄은 반드시 시장 상태 태그(🟢 **[강세/위험선호]**, 🔵 **[완만한 상승/순환매]**, ⚖️ **[혼조세/수급공방]**, 🟡 **[조정/리스크관리]** 중 1개)로 시작하세요.
+2. 이어지는 3줄은 불릿포인트(•)로 (1) 시황 요약 및 주도 요인, (2) 핵심 리스크 요인, (3) 투자자 대응 전략을 각각 1문장씩 작성하세요.
+3. 모든 문장은 마침표(.)로 끝나는 완전한 한국어 문장으로 작성하세요.
+4. 부가적인 인사말 없이 오직 위 형식의 4줄만 정확히 출력하세요.
+"""
+
+    for model in ["gemini-3.6-flash", "gemini-flash-latest"]:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 800}
+            }
+            resp = requests.post(url, headers=headers, json=payload, timeout=7)
+            if resp.status_code == 200:
+                data = resp.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+                    if _is_valid_ai_response(text):
+                        header_name = "미국 증시" if market_type.upper() == "US" else "국내 증시"
+                        return f"💡 **Gemini AI {header_name} 종합 시황 진단**\n{text}"
+        except Exception as e:
+            logger.debug(f"Market Gemini {model} call note: {e}")
+            continue
+
+    return _rule_based_market_diagnosis(market_type, indices_data)
+

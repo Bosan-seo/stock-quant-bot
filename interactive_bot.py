@@ -43,6 +43,9 @@ from telegram.ext import (
 )
 
 from core.macro import get_macro_indicators, format_macro_summary, get_single_macro_indicator
+from core.market_indices import get_us_market_indices, get_kr_market_indices, format_indices_summary
+from core.news_fetcher import get_us_market_news, get_kr_market_news, format_news_summary
+from core.ai_analyzer import generate_market_opinion
 from core.watchlist import get_watchlist, add_to_watchlist, remove_from_watchlist, format_watchlist_summary
 from core.router import route_stock_query
 from core.screener import run_quant_screener, format_screener_report
@@ -268,13 +271,22 @@ async def us_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return
 
-    status_msg = await target_message.reply_text("⏳ 미국 증시 데이터를 분석 중입니다...")
+    status_msg = await target_message.reply_text("⏳ 미국 증시 지수, 뉴스 및 AI 종합 시황을 분석 중입니다...")
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    report_header = f"🗽 **[미국 증시 데일리 분석 리포트]**\n📅 기준시각: `{now_str}`\n"
+    report_header = f"🗽 **[미국 증시 데일리 분석 리포트]**\n📅 기준시각: `{now_str}`"
 
-    macro_data = get_macro_indicators()
-    macro_summary = format_macro_summary(macro_data)
+    # 1. US Market Indices
+    indices_data = get_us_market_indices()
+    indices_summary = format_indices_summary(indices_data, title="미국 3대 시장 지수 현황")
 
+    # 2. US Market News
+    news_items = get_us_market_news(limit=3)
+    news_summary = format_news_summary(news_items, title="오늘의 미국 증시 핵심 뉴스")
+
+    # 3. Gemini AI Market-Wide Opinion
+    market_ai_opinion = generate_market_opinion("US", indices_data, news_items)
+
+    # 4. US Watchlist Stocks
     watchlist = get_watchlist("us")
     if watchlist:
         stock_reports = [analyze_us_stock(t) for t in watchlist]
@@ -291,7 +303,7 @@ async def us_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             f"• `/add <티커>` (예: `/add AAPL`, `/add TSLA`)로 관심종목을 추가해보세요!"
         )
 
-    full_report = f"{report_header}\n{macro_summary}\n\n{stocks_section}"
+    full_report = f"{report_header}\n\n{indices_summary}\n\n{news_summary}\n\n{market_ai_opinion}\n\n{stocks_section}"
     await safe_send_or_edit(target_message, full_report, get_main_menu_keyboard(), status_msg=status_msg)
 
 
@@ -322,30 +334,22 @@ async def kr_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return
 
-    status_msg = await target_message.reply_text("⏳ 국내 증시(KRX) 데이터를 분석 중입니다...")
+    status_msg = await target_message.reply_text("⏳ 국내 증시(KRX) 지수, 뉴스 및 AI 종합 시황을 분석 중입니다...")
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    report_header = f"🏯 **[국내 증시(KRX) 데일리 분석 리포트]**\n📅 기준시각: `{now_str}`\n"
+    report_header = f"🏯 **[국내 증시(KRX) 데일리 분석 리포트]**\n📅 기준시각: `{now_str}`"
 
-    usd_fx = get_single_macro_indicator("KRW=X", "원/달러 환율 (USD/KRW)", "원", multiplier=1.0)
-    jpy_fx = get_single_macro_indicator("JPYKRW=X", "엔/원 환율 (100JPY/KRW)", "원", multiplier=100.0)
+    # 1. KR Market Indices
+    indices_data = get_kr_market_indices()
+    indices_summary = format_indices_summary(indices_data, title="국내 대표 시장 지수 현황")
 
-    fx_lines = ["💱 **주요 환율 및 거시경제 상황**", "-" * 35]
-    if usd_fx.get("status") == "OK" and usd_fx.get("price") is not None:
-        u_pct = usd_fx.get("change_pct", 0.0)
-        u_sign = "🔺 " if u_pct > 0 else ("🔻 " if u_pct < 0 else "➖ ")
-        fx_lines.append(f"• **원/달러 (USD/KRW)**: `{usd_fx['price']:,.2f}원` ({u_sign}{u_pct:+.2f}%)")
-    else:
-        fx_lines.append(f"• **원/달러 환율**: `조회 실패`")
+    # 2. KR Market News
+    news_items = get_kr_market_news(limit=3)
+    news_summary = format_news_summary(news_items, title="오늘의 국내 증시 핵심 뉴스")
 
-    if jpy_fx.get("status") == "OK" and jpy_fx.get("price") is not None:
-        j_pct = jpy_fx.get("change_pct", 0.0)
-        j_sign = "🔺 " if j_pct > 0 else ("🔻 " if j_pct < 0 else "➖ ")
-        fx_lines.append(f"• **엔/원 (100엔당)**: `{jpy_fx['price']:,.2f}원` ({j_sign}{j_pct:+.2f}%)")
-    else:
-        fx_lines.append(f"• **엔/원 환율**: `조회 실패`")
+    # 3. Gemini AI Market-Wide Opinion
+    market_ai_opinion = generate_market_opinion("KR", indices_data, news_items)
 
-    fx_summary = "\n".join(fx_lines)
-
+    # 4. KR Watchlist Stocks
     watchlist = get_watchlist("kr")
     if watchlist:
         stock_reports = [analyze_kr_stock(t) for t in watchlist]
@@ -362,7 +366,7 @@ async def kr_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             f"• `/add <종목명>` (예: `/add 삼성전자`, `/add 카카오`)로 관심종목을 추가해보세요!"
         )
 
-    full_report = f"{report_header}\n{fx_summary}\n\n{stocks_section}"
+    full_report = f"{report_header}\n\n{indices_summary}\n\n{news_summary}\n\n{market_ai_opinion}\n\n{stocks_section}"
     await safe_send_or_edit(target_message, full_report, get_main_menu_keyboard(), status_msg=status_msg)
 
 
