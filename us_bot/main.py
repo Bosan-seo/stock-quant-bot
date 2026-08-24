@@ -140,11 +140,20 @@ def run_us_bot(watchlist=None) -> str:
         watchlist = get_watchlist("us")
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    report_header = f"🗽 **[미국 증시 데일리 분석 리포트]**\n📅 기준시각: `{now_str}`\n"
+    report_header = f"🗽 **[미국 증시 데일리 분석 리포트]**\n📅 기준시각: `{now_str}`"
 
-    # 1. Macro Indicators
-    macro_data = get_macro_indicators()
-    macro_summary = format_macro_summary(macro_data)
+    # 1. Market Indices & News
+    from core.market_indices import get_us_market_indices, format_indices_summary
+    from core.news_fetcher import get_us_market_news, format_news_summary
+    from core.ai_analyzer import generate_market_opinion
+
+    indices_data = get_us_market_indices()
+    indices_summary = format_indices_summary(indices_data, title="미국 3대 시장 지수 현황")
+
+    news_items = get_us_market_news(limit=3)
+    news_summary = format_news_summary(news_items, title="오늘의 미국 증시 핵심 뉴스")
+
+    market_ai_opinion = generate_market_opinion("US", indices_data, news_items)
 
     # 2. US Stocks Technical & Valuation Analysis
     if watchlist:
@@ -162,7 +171,7 @@ def run_us_bot(watchlist=None) -> str:
             f"• `/add <티커>` (예: `/add AAPL`, `/add TSLA`)로 관심종목을 추가해보세요!"
         )
 
-    full_report = f"{report_header}\n{macro_summary}\n\n{stocks_section}"
+    full_report = f"{report_header}\n\n{indices_summary}\n\n{news_summary}\n\n{market_ai_opinion}\n\n{stocks_section}"
 
     # 3. Send Notification
     send_telegram_message(full_report)

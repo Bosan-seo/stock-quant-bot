@@ -166,30 +166,22 @@ def run_kr_bot(watchlist=None) -> str:
         watchlist = get_watchlist("kr")
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    report_header = f"🏯 **[국내 증시(KRX) 데일리 분석 리포트]**\n📅 기준시각: `{now_str}`\n"
+    report_header = f"🏯 **[국내 증시(KRX) 데일리 분석 리포트]**\n📅 기준시각: `{now_str}`"
 
-    # 1. Macro: USD/KRW & JPY/KRW Exchange rate
-    usd_fx = get_single_macro_indicator("KRW=X", "원/달러 환율 (USD/KRW)", "원", multiplier=1.0)
-    jpy_fx = get_single_macro_indicator("JPYKRW=X", "엔/원 환율 (100JPY/KRW)", "원", multiplier=100.0)
+    # 1. Market Indices & News
+    from core.market_indices import get_kr_market_indices, format_indices_summary
+    from core.news_fetcher import get_kr_market_news, format_news_summary
+    from core.ai_analyzer import generate_market_opinion
 
-    fx_lines = ["💱 **주요 환율 및 거시경제 상황**", "-" * 35]
-    if usd_fx.get("status") == "OK" and usd_fx.get("price") is not None:
-        u_pct = usd_fx.get("change_pct", 0.0)
-        u_sign = "🔺 " if u_pct > 0 else ("🔻 " if u_pct < 0 else "➖ ")
-        fx_lines.append(f"• **원/달러 (USD/KRW)**: `{usd_fx['price']:,.2f}원` ({u_sign}{u_pct:+.2f}%)")
-    else:
-        fx_lines.append(f"• **원/달러 환율**: `조회 실패`")
+    indices_data = get_kr_market_indices()
+    indices_summary = format_indices_summary(indices_data, title="국내 대표 시장 지수 현황")
 
-    if jpy_fx.get("status") == "OK" and jpy_fx.get("price") is not None:
-        j_pct = jpy_fx.get("change_pct", 0.0)
-        j_sign = "🔺 " if j_pct > 0 else ("🔻 " if j_pct < 0 else "➖ ")
-        fx_lines.append(f"• **엔/원 (100엔당)**: `{jpy_fx['price']:,.2f}원` ({j_sign}{j_pct:+.2f}%)")
-    else:
-        fx_lines.append(f"• **엔/원 환율**: `조회 실패`")
+    news_items = get_kr_market_news(limit=3)
+    news_summary = format_news_summary(news_items, title="오늘의 국내 증시 핵심 뉴스")
 
-    fx_summary = "\n".join(fx_lines)
+    market_ai_opinion = generate_market_opinion("KR", indices_data, news_items)
 
-    # 2. KRX Stocks Technical & Valuation Analysis
+    # 2. KR Stocks Technical & Valuation Analysis
     if watchlist:
         stock_reports = [analyze_kr_stock(t) for t in watchlist]
         stocks_section = (
@@ -205,7 +197,7 @@ def run_kr_bot(watchlist=None) -> str:
             f"• `/add <종목명>` (예: `/add 삼성전자`, `/add 카카오`)로 관심종목을 추가해보세요!"
         )
 
-    full_report = f"{report_header}\n{fx_summary}\n\n{stocks_section}"
+    full_report = f"{report_header}\n\n{indices_summary}\n\n{news_summary}\n\n{market_ai_opinion}\n\n{stocks_section}"
 
     # 3. Send Notification
     send_telegram_message(full_report)
