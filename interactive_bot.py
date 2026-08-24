@@ -1,28 +1,38 @@
 """
-Interactive Telegram Stock Bot with Inline Keyboards, Real-time Stock Analysis,
-and Dynamic Watchlist Management (/add, /del, /list).
+Interactive Telegram Stock Quant Analysis Bot (Production Stable Version).
+Features:
+  - Smart Query Routing (Zero-collision US/KRX stock lookup)
+  - 3-Strategy Quant Screener (SMA20 Breakout, Oversold Rebound, Value)
+  - Macro & Earnings D-Day Calendar
+  - Gemini AI 3-Line Comprehensive Quant Diagnosis
+  - Resilient Message Delivery (Auto-chunking >3800 chars & Markdown parse-error fallback)
 """
 import os
 import sys
-import asyncio
 import logging
 from datetime import datetime
-from dotenv import load_dotenv
+from typing import List, Optional
 
-# Ensure project root is in sys.path
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
+# Ensure standard output streams support UTF-8 on Windows
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
-load_dotenv()
+# Ensure project root is in sys.path
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from dotenv import load_dotenv
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -46,7 +56,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-# Silence noisy third-party loggers
 for logger_name in ["pykrx", "yfinance", "urllib3", "httpx", "httpcore"]:
     logging.getLogger(logger_name).setLevel(logging.ERROR)
 
@@ -75,6 +84,72 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
+def split_text_into_chunks(text: str, max_chars: int = 3800) -> List[str]:
+    """Split long text into clean chunks at line breaks to avoid Telegram 4096-char truncation."""
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks = []
+    current_chunk = []
+    current_length = 0
+
+    lines = text.split("\n")
+    for line in lines:
+        if current_length + len(line) + 1 > max_chars and current_chunk:
+            chunks.append("\n".join(current_chunk))
+            current_chunk = [line]
+            current_length = len(line)
+        else:
+            current_chunk.append(line)
+            current_length += len(line) + 1
+
+    if current_chunk:
+        chunks.append("\n".join(current_chunk))
+
+    return chunks
+
+
+async def safe_send_or_edit(
+    target_msg,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+    status_msg = None
+) -> None:
+    """
+    Safely send or edit Telegram messages with:
+      1. Automatic chunking for long messages (>3800 chars)
+      2. Markdown parse error fallback to plain text (never cut off or drop)
+    """
+    chunks = split_text_into_chunks(text, max_chars=3800)
+
+    for idx, chunk in enumerate(chunks):
+        is_last = (idx == len(chunks) - 1)
+        markup = reply_markup if is_last else None
+
+        # Try editing first status message if provided
+        if idx == 0 and status_msg:
+            try:
+                await status_msg.edit_text(chunk, reply_markup=markup, parse_mode="Markdown")
+                continue
+            except Exception as e:
+                logger.debug(f"Markdown edit failed ({e}), retrying as plain text...")
+                try:
+                    await status_msg.edit_text(chunk, reply_markup=markup, parse_mode=None)
+                    continue
+                except Exception as e2:
+                    logger.debug(f"Plain text edit failed ({e2}), falling back to new reply.")
+
+        # Send as new message
+        try:
+            await target_msg.reply_text(chunk, reply_markup=markup, parse_mode="Markdown")
+        except Exception as e:
+            logger.debug(f"Markdown send failed ({e}), falling back to plain text...")
+            try:
+                await target_msg.reply_text(chunk, reply_markup=markup, parse_mode=None)
+            except Exception as e_final:
+                logger.error(f"Failed to send message chunk: {e_final}")
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send welcome message with interactive inline buttons."""
     user_name = update.effective_user.first_name if update.effective_user else "투자자"
@@ -85,11 +160,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"궁금한 **종목명**(예: `삼성전자`, `TSLA`, `카카오`, `NVDA`, `리노공업`)을 채팅창에 바로 입력해 보세요!"
     )
     if update.message:
-        await update.message.reply_text(
-            welcome_text,
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode="Markdown"
-        )
+        await safe_send_or_edit(update.message, welcome_text, get_main_menu_keyboard())
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -116,58 +187,57 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• `/us <티커>` / `/kr <종목>` : 특정 종목 직통 분석"
     )
     if update.message:
-        await update.message.reply_text(
-            help_text,
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode="Markdown"
-        )
+        await safe_send_or_edit(update.message, help_text, get_main_menu_keyboard())
 
 
 async def watchlist_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show current watchlist."""
-    target_message = update.message or (update.callback_query.message if update.callback_query else None)
-    if target_message:
-        summary = format_watchlist_summary()
-        await target_message.reply_text(
-            summary,
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode="Markdown"
-        )
+    us_watchlist = get_watchlist("us")
+    kr_watchlist = get_watchlist("kr")
+    summary = format_watchlist_summary(us_watchlist, kr_watchlist)
+    target = update.message or (update.callback_query.message if update.callback_query else None)
+    if target:
+        await safe_send_or_edit(target, summary, get_main_menu_keyboard())
 
 
 async def add_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /add <symbol_or_name>."""
+    """Handle /add <ticker/name> command."""
+    if not update.message:
+        return
     if not context.args:
-        await update.message.reply_text(
-            "⚠️ 추가할 종목명을 입력해주세요.\n예시: `/add MSFT` 또는 `/add 카카오`",
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode="Markdown"
+        await safe_send_or_edit(
+            update.message,
+            "⚠️ 추가할 종목명 또는 티커를 입력해주세요.\n예시:\n• 미국 주식: `/add TSLA`\n• 국내 주식: `/add 카카오` 또는 `/add 005930`",
+            get_main_menu_keyboard()
         )
         return
 
-    query = " ".join(context.args)
-    status_msg = await update.message.reply_text(f"⏳ **{query}** 종목을 확인 후 추가 중입니다...")
-    success, market, msg = add_to_watchlist(query)
-    
-    # Append current summary if added
+    query = " ".join(context.args).strip()
+    market, target = route_stock_query(query)
+
+    if market == "KR":
+        kr_code = find_kr_ticker_code(target)
+        target_code = kr_code if kr_code else target
+        success, msg = add_to_watchlist("kr", target_code)
+    else:
+        success, msg = add_to_watchlist("us", target.upper())
+
     reply_text = msg
     if success:
         reply_text += f"\n\n{format_watchlist_summary()}"
-    
-    await status_msg.edit_text(
-        reply_text,
-        reply_markup=get_main_menu_keyboard(),
-        parse_mode="Markdown"
-    )
+
+    await safe_send_or_edit(update.message, reply_text, get_main_menu_keyboard())
 
 
 async def del_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /del <symbol_or_name>."""
+    """Handle /del <ticker/name> command."""
+    if not update.message:
+        return
     if not context.args:
-        await update.message.reply_text(
-            "⚠️ 삭제할 종목명을 입력해주세요.\n예시: `/del TSLA` 또는 `/del 삼성전자`",
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode="Markdown"
+        await safe_send_or_edit(
+            update.message,
+            "⚠️ 삭제할 종목명 또는 티커를 입력해주세요.\n예시: `/del TSLA` 또는 `/del 삼성전자`",
+            get_main_menu_keyboard()
         )
         return
 
@@ -176,12 +246,8 @@ async def del_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     reply_text = msg
     if success:
         reply_text += f"\n\n{format_watchlist_summary()}"
-        
-    await update.message.reply_text(
-        reply_text,
-        reply_markup=get_main_menu_keyboard(),
-        parse_mode="Markdown"
-    )
+
+    await safe_send_or_edit(update.message, reply_text, get_main_menu_keyboard())
 
 
 async def us_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -190,26 +256,25 @@ async def us_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not target_message:
         return
 
-    # If user provided argument e.g. '/us AAPL' or '/us ON'
     if context.args:
         query_str = " ".join(context.args).strip().upper()
         status_msg = await target_message.reply_text(f"⏳ **{query_str}** (미국장) 분석 중...")
         report = analyze_us_stock(query_str)
-        await status_msg.edit_text(
+        await safe_send_or_edit(
+            target_message,
             f"🔍 **[미국 종목 실시간 퀀트 분석]**\n\n{report}",
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode="Markdown"
+            get_main_menu_keyboard(),
+            status_msg=status_msg
         )
         return
 
     status_msg = await target_message.reply_text("⏳ 미국 증시 데이터를 분석 중입니다...")
-    
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     report_header = f"🗽 **[미국 증시 데일리 분석 리포트]**\n📅 기준시각: `{now_str}`\n"
-    
+
     macro_data = get_macro_indicators()
     macro_summary = format_macro_summary(macro_data)
-    
+
     watchlist = get_watchlist("us")
     if watchlist:
         stock_reports = [analyze_us_stock(t) for t in watchlist]
@@ -225,14 +290,9 @@ async def us_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             f"• 등록된 미국 관심종목이 없습니다.\n"
             f"• `/add <티커>` (예: `/add AAPL`, `/add TSLA`)로 관심종목을 추가해보세요!"
         )
-    
+
     full_report = f"{report_header}\n{macro_summary}\n\n{stocks_section}"
-    
-    await status_msg.edit_text(
-        full_report,
-        reply_markup=get_main_menu_keyboard(),
-        parse_mode="Markdown"
-    )
+    await safe_send_or_edit(target_message, full_report, get_main_menu_keyboard(), status_msg=status_msg)
 
 
 async def kr_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -241,32 +301,31 @@ async def kr_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not target_message:
         return
 
-    # If user provided argument e.g. '/kr 삼성전자'
     if context.args:
         query_str = " ".join(context.args).strip()
         kr_code = find_kr_ticker_code(query_str)
         if not kr_code:
-            await target_message.reply_text(
+            await safe_send_or_edit(
+                target_message,
                 f"❌ **'{query_str}'** 국내 종목을 찾을 수 없습니다.\n종목명 또는 6자리 코드를 입력해주세요.",
-                reply_markup=get_main_menu_keyboard(),
-                parse_mode="Markdown"
+                get_main_menu_keyboard()
             )
             return
 
         status_msg = await target_message.reply_text(f"⏳ **{query_str}** (국내장) 분석 중...")
         report = analyze_kr_stock(kr_code)
-        await status_msg.edit_text(
+        await safe_send_or_edit(
+            target_message,
             f"🔍 **[국내 종목 실시간 퀀트 분석]**\n\n{report}",
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode="Markdown"
+            get_main_menu_keyboard(),
+            status_msg=status_msg
         )
         return
 
     status_msg = await target_message.reply_text("⏳ 국내 증시(KRX) 데이터를 분석 중입니다...")
-    
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     report_header = f"🏯 **[국내 증시(KRX) 데일리 분석 리포트]**\n📅 기준시각: `{now_str}`\n"
-    
+
     usd_fx = get_single_macro_indicator("KRW=X", "원/달러 환율 (USD/KRW)", "원", multiplier=1.0)
     jpy_fx = get_single_macro_indicator("JPYKRW=X", "엔/원 환율 (100JPY/KRW)", "원", multiplier=100.0)
 
@@ -286,7 +345,7 @@ async def kr_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         fx_lines.append(f"• **엔/원 환율**: `조회 실패`")
 
     fx_summary = "\n".join(fx_lines)
-    
+
     watchlist = get_watchlist("kr")
     if watchlist:
         stock_reports = [analyze_kr_stock(t) for t in watchlist]
@@ -302,14 +361,9 @@ async def kr_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             f"• 등록된 국내 관심종목이 없습니다.\n"
             f"• `/add <종목명>` (예: `/add 삼성전자`, `/add 카카오`)로 관심종목을 추가해보세요!"
         )
-    
+
     full_report = f"{report_header}\n{fx_summary}\n\n{stocks_section}"
-    
-    await status_msg.edit_text(
-        full_report,
-        reply_markup=get_main_menu_keyboard(),
-        parse_mode="Markdown"
-    )
+    await safe_send_or_edit(target_message, full_report, get_main_menu_keyboard(), status_msg=status_msg)
 
 
 async def macro_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -321,12 +375,7 @@ async def macro_report_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         macro_summary = format_macro_summary(macro_data)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         report = f"🌐 **[글로벌 매크로 & 원자재 지표]**\n📅 기준시각: `{now_str}`\n\n{macro_summary}"
-        
-        await status_msg.edit_text(
-            report,
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode="Markdown"
-        )
+        await safe_send_or_edit(target_message, report, get_main_menu_keyboard(), status_msg=status_msg)
 
 
 async def screener_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -336,11 +385,7 @@ async def screener_command_handler(update: Update, context: ContextTypes.DEFAULT
         status_msg = await target_message.reply_text("⏳ 퀀트 스크리너가 국내/미국 대표 종목을 분석 중입니다 (약 3~5초 소요)...")
         screen_data = run_quant_screener()
         report = format_screener_report(screen_data)
-        await status_msg.edit_text(
-            report,
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode="Markdown"
-        )
+        await safe_send_or_edit(target_message, report, get_main_menu_keyboard(), status_msg=status_msg)
 
 
 async def calendar_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -349,18 +394,14 @@ async def calendar_command_handler(update: Update, context: ContextTypes.DEFAULT
     if target_message:
         status_msg = await target_message.reply_text("⏳ 글로벌 경제 일정 및 실적 일정을 조회 중입니다...")
         report = format_economic_calendar_report()
-        await status_msg.edit_text(
-            report,
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode="Markdown"
-        )
+        await safe_send_or_edit(target_message, report, get_main_menu_keyboard(), status_msg=status_msg)
 
 
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle inline button clicks."""
     query = update.callback_query
     await query.answer()
-    
+
     data = query.data
     if data == "btn_us":
         await us_report_handler(update, context)
@@ -390,11 +431,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             "• 목록: `/list`"
         )
         if query.message:
-            await query.message.reply_text(
-                help_text,
-                reply_markup=get_main_menu_keyboard(),
-                parse_mode="Markdown"
-            )
+            await safe_send_or_edit(query.message, help_text, get_main_menu_keyboard())
 
 
 def process_stock_query(query_text: str) -> str:
@@ -441,21 +478,19 @@ def process_stock_query(query_text: str) -> str:
 async def check_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /check <query> command."""
     if not context.args:
-        await update.message.reply_text(
-            "⚠️ 조회할 종목을 입력해주세요.\n예시: `/check TSLA` 또는 `/check 삼성전자`",
-            reply_markup=get_main_menu_keyboard(),
-            parse_mode="Markdown"
-        )
+        if update.message:
+            await safe_send_or_edit(
+                update.message,
+                "⚠️ 조회할 종목을 입력해주세요.\n예시: `/check TSLA` 또는 `/check 삼성전자`",
+                get_main_menu_keyboard()
+            )
         return
 
     query_str = " ".join(context.args)
-    status_msg = await update.message.reply_text(f"⏳ **{query_str}** 종목을 분석 중입니다...")
-    result_text = process_stock_query(query_str)
-    await status_msg.edit_text(
-        result_text,
-        reply_markup=get_main_menu_keyboard(),
-        parse_mode="Markdown"
-    )
+    if update.message:
+        status_msg = await update.message.reply_text(f"⏳ **{query_str}** 종목을 분석 중입니다...")
+        result_text = process_stock_query(query_str)
+        await safe_send_or_edit(update.message, result_text, get_main_menu_keyboard(), status_msg=status_msg)
 
 
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -469,11 +504,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     status_msg = await update.message.reply_text(f"⏳ **{text}** 분석 중...")
     result_text = process_stock_query(text)
-    await status_msg.edit_text(
-        result_text,
-        reply_markup=get_main_menu_keyboard(),
-        parse_mode="Markdown"
-    )
+    await safe_send_or_edit(update.message, result_text, get_main_menu_keyboard(), status_msg=status_msg)
 
 
 def run_interactive_bot() -> None:

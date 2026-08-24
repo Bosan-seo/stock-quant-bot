@@ -136,7 +136,8 @@ def generate_quant_opinion(stock_data: Dict[str, Any]) -> str:
 [작성 규칙]
 1. 첫째 줄: 🟢 [적극 매수], 🔵 [분할 매수], ⚖️ [중립/관망], 🟡 [비중 축소] 중 1개 태그로 시작
 2. 이어지는 3개의 불릿포인트(•)로 기술적 추세, 밸류에이션, 핵심 대응전략을 1문장씩 작성
-3. 간결하고 명확하게 마크다운 형식으로 작성
+3. 모든 문장은 중간에 끊기지 않고 마침표(.)로 끝나는 완전한 한국어 문장으로 작성
+4. 불필요한 서론이나 결론 없이 지정된 4줄(태그 1줄 + 불릿포인트 3줄)만 간결하게 출력
 """
 
     for model in ["gemini-3.6-flash", "gemini-flash-latest", "gemini-2.5-flash"]:
@@ -145,15 +146,15 @@ def generate_quant_opinion(stock_data: Dict[str, Any]) -> str:
             headers = {"Content-Type": "application/json"}
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 400}
+                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024}
             }
-            resp = requests.post(url, headers=headers, json=payload, timeout=4)
+            resp = requests.post(url, headers=headers, json=payload, timeout=7)
             if resp.status_code == 200:
                 data = resp.json()
                 candidates = data.get("candidates", [])
                 if candidates:
                     text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
-                    if text:
+                    if text and len(text) > 15:
                         return f"💡 **AI 퀀트 종합 진단 (Gemini AI)**\n{text}"
         except Exception as e:
             logger.debug(f"Gemini {model} call note: {e}")
