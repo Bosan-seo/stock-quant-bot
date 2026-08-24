@@ -8,7 +8,7 @@ import re
 import json
 import logging
 import requests
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
