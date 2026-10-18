@@ -22,7 +22,9 @@ if PROJECT_ROOT not in sys.path:
 from core.macro import get_single_macro_indicator
 from core.indicators import add_technical_indicators
 from core.notifier import send_telegram_message
-from core.ai_analyzer import generate_quant_opinion
+from core.quant_engine import compute_quant_metrics
+from core.ai_analyzer import generate_structured_quant_opinion
+from core.user_config import get_current_style
 from kr_bot.fetcher import get_kr_stock_data
 from core.watchlist import get_watchlist
 
@@ -126,32 +128,25 @@ def analyze_kr_stock(ticker_code: str) -> str:
     if market_cap != "N/A" or week52_high != "N/A":
         lines.append(f"- **기업규모/범위**: `시총: {market_cap}` | `52주: {week52_low} ~ {week52_high}`")
 
-    # 6. AI Quant Diagnosis
-    quant_payload = {
-        "market": "KR",
-        "name": name,
-        "ticker": ticker_code,
-        "price": close_price,
-        "prev_close": prev_close,
-        "change_pct": change_pct,
-        "sma20": sma20,
-        "prev_sma20": prev_sma20,
-        "rsi14": rsi14,
-        "macd": macd,
-        "macd_signal": macd_signal,
+    # Deterministic Quant Pre-computation (Zero-Calculation Rule)
+    style = get_current_style()
+    fundamentals = {
         "per": valuation.get("per"),
         "pbr": valuation.get("pbr"),
-        "div_yield": valuation.get("div"),
-        "roe": None,
+        "div_yield": valuation.get("div") or 0.0,
+        "roe": None
     }
-    ai_opinion = generate_quant_opinion(quant_payload)
+    metrics = compute_quant_metrics(df, ticker_code, name, fundamentals, mode=style, currency="원")
+    ai_opinion = generate_structured_quant_opinion(metrics, mode=style)
 
     lines.extend([
         f"- **20일 이평선**: {sma_status}",
-        f"- **RSI (14)**: {rsi_status}",
+        f"- **RSI (14)**: {rsi_status} | **3일 변화량**: `{metrics.rsi_delta_3d:+.1f}`",
         f"- **MACD (12,26,9)**: {macd_status}",
+        f"- **거래량 강도 (RVOL)**: 20일 평균 대비 `{metrics.rvol}배`",
         f"- **밸류에이션**: `PER: {per}` | `PBR: {pbr}` | `배당수익률: {div_yield}`",
         f"- **주당 가치**: `EPS: {eps}` | `BPS: {bps}`",
+        f"- **가격 가이드**: `1차 지지: {metrics.support_1:,.0f}원` | `1차 목표: {metrics.resistance_1:,.0f}원` | `손절선: {metrics.stop_loss:,.0f}원`",
         f"\n{ai_opinion}",
     ])
 

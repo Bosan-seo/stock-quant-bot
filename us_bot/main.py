@@ -22,7 +22,9 @@ if PROJECT_ROOT not in sys.path:
 from core.macro import get_macro_indicators, format_macro_summary
 from core.indicators import add_technical_indicators
 from core.notifier import send_telegram_message
-from core.ai_analyzer import generate_quant_opinion
+from core.quant_engine import compute_quant_metrics
+from core.ai_analyzer import generate_structured_quant_opinion
+from core.user_config import get_current_style
 from us_bot.fetcher import get_us_stock_data
 
 
@@ -100,33 +102,26 @@ def analyze_us_stock(ticker: str) -> str:
     pbr = f"{valuation['pbr']:.2f}배" if valuation.get("pbr") is not None else "N/A"
     roe = f"{valuation['roe']:.2f}%" if valuation.get("roe") is not None else "N/A"
 
-    # AI Quant Opinion
-    quant_payload = {
-        "market": "US",
-        "name": name,
-        "ticker": ticker,
-        "price": close_price,
-        "prev_close": prev_close,
-        "change_pct": change_pct,
-        "sma20": sma20,
-        "prev_sma20": prev_sma20,
-        "rsi14": rsi14,
-        "macd": macd,
-        "macd_signal": macd_signal,
+    # Deterministic Quant Pre-computation (Zero-Calculation Rule)
+    style = get_current_style()
+    fundamentals = {
         "per": valuation.get("pe"),
         "pbr": valuation.get("pbr"),
-        "div_yield": None,
-        "roe": valuation.get("roe"),
+        "div_yield": valuation.get("div_yield") or 0.0,
+        "roe": valuation.get("roe")
     }
-    ai_opinion = generate_quant_opinion(quant_payload)
+    metrics = compute_quant_metrics(df, ticker, name, fundamentals, mode=style, currency="$")
+    ai_opinion = generate_structured_quant_opinion(metrics, mode=style)
 
     lines = [
         f"### 🇺🇸 **{name} ({ticker})**",
         f"- **현재가**: {price_line}",
         f"- **20일 이평선**: {sma_status}",
-        f"- **RSI (14)**: {rsi_status}",
+        f"- **RSI (14)**: {rsi_status} | **3일 변화량**: `{metrics.rsi_delta_3d:+.1f}`",
         f"- **MACD (12,26,9)**: {macd_status}",
+        f"- **거래량 강도 (RVOL)**: 20일 평균 대비 `{metrics.rvol}배`",
         f"- **밸류에이션**: `PER: {pe}` | `PBR: {pbr}` | `ROE: {roe}`",
+        f"- **가격 가이드**: `1차 지지: ${metrics.support_1:,.2f}` | `1차 목표: ${metrics.resistance_1:,.2f}` | `손절선: ${metrics.stop_loss:,.2f}`",
         f"\n{ai_opinion}",
     ]
     return "\n".join(lines)

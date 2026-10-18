@@ -10,6 +10,7 @@ Features:
 import os
 import sys
 import logging
+import asyncio
 from datetime import datetime
 from typing import List, Optional
 
@@ -583,12 +584,12 @@ async def check_command_handler(update: Update, context: ContextTypes.DEFAULT_TY
     query_str = " ".join(context.args)
     if update.message:
         status_msg = await update.message.reply_text(f"⏳ **{query_str}** 종목을 분석 중입니다...")
-        result_text = process_stock_query(query_str)
+        result_text = await asyncio.to_thread(process_stock_query, query_str)
         await safe_send_or_edit(update.message, result_text, get_main_menu_keyboard(), status_msg=status_msg)
 
 
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle arbitrary text inputs as stock queries."""
+    """Handle arbitrary text inputs as stock queries with non-blocking async execution."""
     if not update.message or not update.message.text:
         return
 
@@ -597,7 +598,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return  # Handled by command handlers
 
     status_msg = await update.message.reply_text(f"⏳ **{text}** 분석 중...")
-    result_text = process_stock_query(text)
+    result_text = await asyncio.to_thread(process_stock_query, text)
     await safe_send_or_edit(update.message, result_text, get_main_menu_keyboard(), status_msg=status_msg)
 
 
