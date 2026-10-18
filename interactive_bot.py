@@ -71,23 +71,18 @@ logger = logging.getLogger("InteractiveBot")
 
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
-    """Return inline keyboard buttons for main actions."""
+    """Return streamlined inline keyboard buttons for main actions (Plan B: 5 Buttons)."""
     keyboard = [
         [
-            InlineKeyboardButton("🇺🇸 미국장 요약", callback_data="btn_us"),
-            InlineKeyboardButton("🇰🇷 국내장 요약", callback_data="btn_kr"),
+            InlineKeyboardButton("🇺🇸 미국 증시 브리핑", callback_data="btn_us"),
+            InlineKeyboardButton("🇰🇷 국내 증시 브리핑", callback_data="btn_kr"),
         ],
         [
             InlineKeyboardButton("🎯 퀀트 유망주 발굴", callback_data="btn_screener"),
-            InlineKeyboardButton("📅 경제 일정 & 실적 D-Day", callback_data="btn_calendar"),
-        ],
-        [
-            InlineKeyboardButton("📊 매크로 & 환율", callback_data="btn_macro"),
-            InlineKeyboardButton("⭐ 내 관심종목", callback_data="btn_watchlist"),
+            InlineKeyboardButton("📅 경제 일정 & D-Day", callback_data="btn_calendar"),
         ],
         [
             InlineKeyboardButton("⚙️ AI 진단 스타일 설정", callback_data="btn_style_menu"),
-            InlineKeyboardButton("💡 사용 가이드", callback_data="btn_help"),
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
