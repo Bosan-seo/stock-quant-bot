@@ -53,6 +53,10 @@ from core.calendar import format_economic_calendar_report
 from us_bot.main import analyze_us_stock, DEFAULT_WATCHLIST as US_DEFAULT_WATCHLIST
 from kr_bot.main import analyze_kr_stock, DEFAULT_KR_WATCHLIST
 from kr_bot.fetcher import find_kr_ticker_code
+from core.user_config import (
+    get_current_style, set_current_style, get_style_name,
+    STYLE_STANDARD, STYLE_CONSERVATIVE, STYLE_MOMENTUM, STYLE_MACRO
+)
 
 # Configure logging
 logging.basicConfig(
@@ -81,10 +85,29 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("⭐ 내 관심종목", callback_data="btn_watchlist"),
         ],
         [
+            InlineKeyboardButton("⚙️ AI 진단 스타일 설정", callback_data="btn_style_menu"),
             InlineKeyboardButton("💡 사용 가이드", callback_data="btn_help"),
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+
+def get_style_selection_keyboard() -> InlineKeyboardMarkup:
+    """Return inline keyboard buttons for selecting AI diagnosis style."""
+    current = get_current_style()
+    
+    def check(s: str) -> str:
+        return " (선택됨 ✅)" if s == current else ""
+
+    keyboard = [
+        [InlineKeyboardButton(f"⚖️ 스탠다드 (균형 퀀트){check(STYLE_STANDARD)}", callback_data="set_style_STANDARD")],
+        [InlineKeyboardButton(f"🛡️ 보수적 가치/배당 (리스크 관리){check(STYLE_CONSERVATIVE)}", callback_data="set_style_CONSERVATIVE")],
+        [InlineKeyboardButton(f"🚀 공격적 모멘텀 (돌파/추세){check(STYLE_MOMENTUM)}", callback_data="set_style_MOMENTUM")],
+        [InlineKeyboardButton(f"🧠 매크로/스토리 (시황·거시 연계){check(STYLE_MACRO)}", callback_data="set_style_MACRO")],
+        [InlineKeyboardButton("🔙 메인 메뉴로 돌아가기", callback_data="btn_menu_back")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 
 
 def split_text_into_chunks(text: str, max_chars: int = 3800) -> List[str]:
@@ -179,12 +202,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• 채팅창에 종목명이나 티커를 그냥 입력하시면 3줄 AI 진단과 함께 리포트가 전송됩니다!\n"
         "  - 미국 주식: `AAPL`, `TSLA`, `NVDA`, `MSFT`, `ON`, `OPEN` 등\n"
         "  - 국내 주식: `삼성전자`, `SK하이닉스`, `005930`, `리노공업`, `SB성보` 등\n\n"
-        "3️⃣ **관심종목 관리**\n"
+        "3️⃣ **AI 진단 스타일 설정 (`/style` 또는 버튼)**\n"
+        "• `스탠다드` : 기술적 지표 & 밸류에이션의 균형 잡힌 객관적 진단\n"
+        "• `보수적 가치/배당` : 원금 보존 및 하방 리스크/고평가 경고 중심\n"
+        "• `공격적 모멘텀` : 20일선 돌파 및 단기 추세/돌파 매매 중심\n"
+        "• `매크로/스토리` : 금리·환율 거시 환경 및 섹터 수급 순환매 연계\n\n"
+        "4️⃣ **관심종목 관리**\n"
         "• `/add <종목>` : 관심종목에 추가\n"
         "• `/del <종목>` : 관심종목에서 삭제\n"
         "• `/list` : 현재 등록된 관심종목 보기\n\n"
-        "4️⃣ **단축 명령어 목록**\n"
+        "5️⃣ **단축 명령어 목록**\n"
         "• `/menu` : 메인 메뉴 버튼 호출\n"
+        "• `/style` 또는 `/mode` : AI 진단 스타일 설정\n"
         "• `/screen` : 퀀트 유망주 실시간 스크리너\n"
         "• `/calendar` : 경제 캘린더 & 실적 D-Day\n"
         "• `/us <티커>` / `/kr <종목>` : 특정 종목 직통 분석"
@@ -201,6 +230,25 @@ async def watchlist_command_handler(update: Update, context: ContextTypes.DEFAUL
     target = update.message or (update.callback_query.message if update.callback_query else None)
     if target:
         await safe_send_or_edit(target, summary, get_main_menu_keyboard())
+
+
+async def style_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show or change AI diagnosis style."""
+    current = get_current_style()
+    cur_name = get_style_name(current)
+    style_desc = (
+        f"⚙️ **[AI 퀀트 진단 스타일 설정]**\n\n"
+        f"현재 적용된 스타일: **{cur_name}**\n\n"
+        f"투자 성향에 맞춰 원하는 스타일을 선택하세요:\n"
+        f"• ⚖️ **스탠다드**: 기술적 지표와 밸류에이션의 균형 잡힌 객관적 진단\n"
+        f"• 🛡️ **보수적 가치/배당**: 원금 보존 및 하방 리스크/고평가 경고 중심\n"
+        f"• 🚀 **공격적 모멘텀**: 20일선 돌파, MACD, 단기 추세/돌파 매매 중심\n"
+        f"• 🧠 **매크로/스토리**: 금리·환율 거시 환경과 섹터 수급 순환매 연계\n\n"
+        f"👇 **원하는 스타일 버튼을 터치하여 즉시 변경하세요:**"
+    )
+    target = update.message or (update.callback_query.message if update.callback_query else None)
+    if target:
+        await safe_send_or_edit(target, style_desc, get_style_selection_keyboard())
 
 
 async def add_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -283,8 +331,11 @@ async def us_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     news_items = get_us_market_news(limit=3)
     news_summary = format_news_summary(news_items, title="오늘의 미국 증시 핵심 뉴스")
 
-    # 3. Gemini AI Market-Wide Opinion
-    market_ai_opinion = generate_market_opinion("US", indices_data, news_items)
+    # 3. Macro Context for Market Opinion
+    macro_context = get_macro_indicators()
+
+    # 4. Gemini AI Market-Wide Opinion (Style-Aware & Macro-Linked)
+    market_ai_opinion = generate_market_opinion("US", indices_data, news_items, macro_context=macro_context)
 
     # 4. US Watchlist Stocks
     watchlist = get_watchlist("us")
@@ -346,8 +397,11 @@ async def kr_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     news_items = get_kr_market_news(limit=3)
     news_summary = format_news_summary(news_items, title="오늘의 국내 증시 핵심 뉴스")
 
-    # 3. Gemini AI Market-Wide Opinion
-    market_ai_opinion = generate_market_opinion("KR", indices_data, news_items)
+    # 3. Macro Context for Market Opinion
+    macro_context = get_macro_indicators()
+
+    # 4. Gemini AI Market-Wide Opinion (Style-Aware & Macro-Linked)
+    market_ai_opinion = generate_market_opinion("KR", indices_data, news_items, macro_context=macro_context)
 
     # 4. KR Watchlist Stocks
     watchlist = get_watchlist("kr")
@@ -419,6 +473,42 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await macro_report_handler(update, context)
     elif data == "btn_watchlist":
         await watchlist_command_handler(update, context)
+    elif data == "btn_style_menu":
+        current = get_current_style()
+        cur_name = get_style_name(current)
+        style_desc = (
+            f"⚙️ **[AI 퀀트 진단 스타일 설정]**\n\n"
+            f"현재 적용된 스타일: **{cur_name}**\n\n"
+            f"투자 성향에 맞춰 원하는 스타일을 선택하세요:\n"
+            f"• ⚖️ **스탠다드**: 기술적 지표와 밸류에이션의 균형 잡힌 객관적 진단\n"
+            f"• 🛡️ **보수적 가치/배당**: 원금 보존 및 하방 리스크/고평가 경고 중심\n"
+            f"• 🚀 **공격적 모멘텀**: 20일선 돌파, MACD, 단기 추세/돌파 매매 중심\n"
+            f"• 🧠 **매크로/스토리**: 금리·환율 거시 환경과 섹터 수급 순환매 연계\n\n"
+            f"👇 **원하는 스타일 버튼을 터치하여 즉시 변경하세요:**"
+        )
+        if query.message:
+            await safe_send_or_edit(query.message, style_desc, get_style_selection_keyboard())
+
+    elif data.startswith("set_style_"):
+        new_style = data.replace("set_style_", "").strip()
+        set_current_style(new_style)
+        updated_name = get_style_name(new_style)
+        msg_text = (
+            f"✅ **AI 진단 스타일이 성공적으로 변경되었습니다!**\n\n"
+            f"🎯 변경된 스타일: **{updated_name}**\n\n"
+            f"앞으로의 모든 종목 분석 및 미국/국내 시황 리포트에 이 성향이 정밀 반영됩니다."
+        )
+        if query.message:
+            await safe_send_or_edit(query.message, msg_text, get_style_selection_keyboard())
+
+    elif data == "btn_menu_back":
+        if query.message:
+            await safe_send_or_edit(
+                query.message,
+                "👋 메인 메뉴입니다. 원하시는 작업을 선택해주세요:",
+                get_main_menu_keyboard()
+            )
+
     elif data == "btn_help":
         help_text = (
             "💡 **[종목 조회 및 관리 팁]**\n\n"
@@ -532,6 +622,7 @@ def run_interactive_bot() -> None:
     app.add_handler(CommandHandler(["screen", "screener", "pick"], screener_command_handler))
     app.add_handler(CommandHandler(["calendar", "events", "dday"], calendar_command_handler))
     app.add_handler(CommandHandler(["list", "watchlist"], watchlist_command_handler))
+    app.add_handler(CommandHandler(["style", "mode"], style_command_handler))
     app.add_handler(CommandHandler("add", add_command_handler))
     app.add_handler(CommandHandler(["del", "remove"], del_command_handler))
     app.add_handler(CommandHandler(["check", "stock"], check_command_handler))
